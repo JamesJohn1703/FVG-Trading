@@ -7,33 +7,39 @@
 #property link      "https://www.mql5.com"
 #property version   "1.00"
 #include <Trade/Trade.mqh>
+
 CTrade Trade;
+
 double input lotsize = 0.01;
-int input Daily_bias_value;//1-BULLISH BIAS AND 2-BEARISH BIAS
+int input Daily_bias_value;     // 1 - BULLISH, 2 - BEARISH
+int input ResetIntervalHours = 24;  // Reset trade count every X hours
+
+int tradeCount = 0;
+datetime lastResetTime = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
   {
-//---
    Print("The FVG Trading EA is loaded");
-//---
-      return(INIT_SUCCEEDED);
+   lastResetTime = TimeCurrent(); // initialize reset timer
+   return(INIT_SUCCEEDED);
   }
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-  {
-//---
-   Print("De initialising");
-  }
+
 //+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
   {
-//---
+   // Reset trade count if interval has passed
+   if (TimeCurrent() - lastResetTime >= ResetIntervalHours * 3600)
+     {
+      tradeCount = 0;
+      lastResetTime = TimeCurrent();
+      Print("Trade count reset after ", ResetIntervalHours, " hours.");
+     }
+
    if (Daily_bias_value == 1)
       {
          Bullish_FVG();
@@ -42,73 +48,85 @@ void OnTick()
       {
          Bearish_FVG();
       }
+   else if(Daily_bias_value == 3)
+      {
+         Bullish_FVG();
+         Bearish_FVG();
+      }
    else
-     {
       Print("Daily bias is wrong");
+  }
+
+//+------------------------------------------------------------------+
+//| Bullish FVG logic                                                |
+//+------------------------------------------------------------------+
+void Bullish_FVG()
+  {
+   if (tradeCount >= 2) return;
+
+   double current_High = iHigh(NULL, PERIOD_M15, 1);
+   double current_Open = iOpen(NULL, PERIOD_M15, 1);
+   double current_Close = iClose(NULL, PERIOD_M15, 1);
+   double current_Low = iLow(NULL, PERIOD_M15, 1);
+   double BTN_High = iHigh(NULL, PERIOD_M15, 2);
+   double Previous_High = iHigh(NULL, PERIOD_M15, 3);
+   double Previous_Low = iLow(NULL, PERIOD_M15, 3);
+
+   double entryPrice = current_Low;
+   double StopLoss = Previous_Low;
+   double TakeProfit = current_High;
+
+   if (Previous_High < current_Low)
+     {
+      if (current_Close >= current_Open && current_Close <= BTN_High &&
+          (current_High - current_Close) / (current_Open - current_Low) >= 2.0)
+        {
+         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1); tradeCount++; }
+         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2); tradeCount++; }
+        }
+      else if (current_Open >= current_Close && current_Close <= BTN_High &&
+               (current_High - current_Open) / (current_Close - current_Low) >= 2.0)
+        {
+         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3); tradeCount++; }
+         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4); tradeCount++; }
+        }
+      else Print("Not a good Bullish Fair value Gap");
      }
   }
+
 //+------------------------------------------------------------------+
-
-
-void Bullish_FVG()
-   {
-      double current_High = iHigh(NULL,PERIOD_M15,1);
-      double current_Open = iOpen(NULL,PERIOD_M15,1);
-      double current_Close = iClose(NULL,PERIOD_M15,1);
-      double current_Low = iLow(NULL,PERIOD_M15,1);
-      double BTN_High = iHigh(NULL,PERIOD_M15,2);
-      double Previous_High = iHigh(NULL,PERIOD_M15,3);
-      double Previous_Low = iLow(NULL,PERIOD_M15,3);
-      
-      double StopLoss = Previous_Low;
-      double TakeProfit = current_High;
-      
-      string comment = "Buy trade";
-      
-      if (Previous_High < current_Low)
-         {
-            if (current_Close >= current_Open && current_Close <= BTN_High && (current_High-current_Close)/(current_Open-current_Low) >= 2.0)
-               {
-                  Trade.BuyLimit(lotsize, current_Low, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1);
-                  Trade.BuyLimit(lotsize, current_Low, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2);
-               }
-            else if (current_Open >= current_Close && current_Close <= BTN_High && (current_High-current_Open)/(current_Close-current_Low) >= 2.0)
-               {                  
-                  Trade.BuyLimit(lotsize, current_Low, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3);
-                  Trade.BuyLimit(lotsize, current_Low, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4);
-               }
-            else Print("Not a good Bullish Fair value Gap");
-         }
-   }
-   
-   
+//| Bearish FVG logic                                                |
+//+------------------------------------------------------------------+
 void Bearish_FVG()
-   {
-      double current_High = iHigh(NULL,PERIOD_M15,1);
-      double current_Open = iOpen(NULL,PERIOD_M15,1);
-      double current_Close = iClose(NULL,PERIOD_M15,1);
-      double current_Low = iLow(NULL,PERIOD_M15,1);
-      double BTN_Low = iLow(NULL,PERIOD_M15,2);
-      double Previous_High = iHigh(NULL,PERIOD_M15,3);
-      double Previous_Low = iLow(NULL,PERIOD_M15,3);
-      
-      double StopLoss = Previous_High;
-      double TakeProfit = current_Low; 
-      
-      string comment = "Sell trade";
-      
-      if (Previous_Low > current_High)
-         {
-            if (current_Open >= current_Close && current_Close >= BTN_Low && (current_Low-current_Close)/(current_Open-current_High) >= 2.0)
-               {
-                  Trade.SellLimit(lotsize, current_High, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1);
-                  Trade.SellLimit(lotsize, current_High, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2);
-               }
-            else if (current_Close >= current_Open && current_Close >= BTN_Low && (current_Low-current_Open)/(current_Close-current_High) >= 2.0)
-               {          
-                  Trade.SellLimit(lotsize, current_High, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3);
-                  Trade.SellLimit(lotsize, current_High, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4); 
-               }
-            else Print("Not a good bearish Fair value gap");
-         }
-   }
+  {
+   if (tradeCount >= 2) return;
+
+   double current_High = iHigh(NULL, PERIOD_M15, 1);
+   double current_Open = iOpen(NULL, PERIOD_M15, 1);
+   double current_Close = iClose(NULL, PERIOD_M15, 1);
+   double current_Low = iLow(NULL, PERIOD_M15, 1);
+   double BTN_Low = iLow(NULL, PERIOD_M15, 2);
+   double Previous_High = iHigh(NULL, PERIOD_M15, 3);
+   double Previous_Low = iLow(NULL, PERIOD_M15, 3);
+
+   double entryPrice = current_High;
+   double StopLoss = Previous_High;
+   double TakeProfit = current_Low;
+
+   if (Previous_Low > current_High)
+     {
+      if (current_Open >= current_Close && current_Close >= BTN_Low &&
+          (current_Low - current_Close) / (current_Open - current_High) >= 2.0)
+        {
+         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1); tradeCount++; }
+         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2); tradeCount++; }
+        }
+      else if (current_Close >= current_Open && current_Close >= BTN_Low &&
+               (current_Low - current_Open) / (current_Close - current_High) >= 2.0)
+        {
+         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3); tradeCount++; }
+         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4); tradeCount++; }
+        }
+      else Print("Not a good Bearish Fair value Gap");
+     }
+  }
