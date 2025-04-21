@@ -11,11 +11,20 @@
 CTrade Trade;
 
 double input lotsize = 0.01;
-int input Daily_bias_value;     // 1 - BULLISH, 2 - BEARISH
-int input ResetIntervalHours = 24;  // Reset trade count every X hours
+double input factor = 0.5;
+int input Daily_bias_value;     // 1-BULL,2-BEAR,3-BOTH
+int input ResetIntervalHours = 1;  // Reset trade count every X hours
 
 int tradeCount = 0;
+
+
+bool highCleared = false;
+bool lowCleared = false;
+
+
+datetime lastDailyReset = 0;
 datetime lastResetTime = 0;
+
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -32,6 +41,17 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnTick()
   {
+  
+  datetime currentDayStart = iTime(_Symbol, PERIOD_D1, 0);
+
+   // Reset daily flag once per new day
+   if (currentDayStart != lastDailyReset)
+   {
+      lastDailyReset = currentDayStart;
+      highCleared = false;
+      lowCleared = false;
+      
+   }
    // Reset trade count if interval has passed
    if (TimeCurrent() - lastResetTime >= ResetIntervalHours * 3600)
      {
@@ -40,18 +60,51 @@ void OnTick()
       Print("Trade count reset after ", ResetIntervalHours, " hours.");
      }
 
-   if (Daily_bias_value == 1)
+   if (Daily_bias_value == 2)
       {
-         Bullish_FVG();
+         double dailyHigh = iHigh(_Symbol, PERIOD_D1, 1);
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      
+         if (!highCleared && currentPrice > dailyHigh)
+            {
+               highCleared = true;
+               Print("Daily high cleared!");
+               Bearish_FVG();
+            }
+            
       }
-   else if (Daily_bias_value == 2)
+   else if (Daily_bias_value == 1)
       {
-         Bearish_FVG();
-      }
+         double dailyLow = iLow(_Symbol, PERIOD_D1, 1);
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      
+         if (!lowCleared && currentPrice < dailyLow)
+            {
+               lowCleared = true;
+               Print("Daily Low cleared!");
+               Bullish_FVG();
+            }
+      
+       }
    else if(Daily_bias_value == 3)
       {
-         Bullish_FVG();
-         Bearish_FVG();
+         double dailyLow = iLow(_Symbol, PERIOD_D1, 1);
+         double dailyHigh = iHigh(NULL,PERIOD_D1,1);
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      
+         
+         if (!lowCleared && currentPrice < dailyLow )
+            {
+               lowCleared = true;
+               Print("The daily low has been cleared");
+               Bullish_FVG();
+            }
+         if (!highCleared && currentPrice > dailyHigh )
+            {
+               highCleared = true;
+               Print("The daily high has been cleared");
+               Bearish_FVG();
+            }
       }
    else
       Print("Daily bias is wrong");
@@ -60,10 +113,13 @@ void OnTick()
 //+------------------------------------------------------------------+
 //| Bullish FVG logic                                                |
 //+------------------------------------------------------------------+
+datetime entryDetectedTime = 0;  // Global variable, reset if needed
+
 void Bullish_FVG()
-  {
+{
    if (tradeCount >= 2) return;
 
+   // Get M15 candle data
    double current_High = iHigh(NULL, PERIOD_M15, 1);
    double current_Open = iOpen(NULL, PERIOD_M15, 1);
    double current_Close = iClose(NULL, PERIOD_M15, 1);
@@ -72,61 +128,179 @@ void Bullish_FVG()
    double Previous_High = iHigh(NULL, PERIOD_M15, 3);
    double Previous_Low = iLow(NULL, PERIOD_M15, 3);
 
-   double entryPrice = current_Low;
-   double StopLoss = Previous_Low;
-   double TakeProfit = current_High;
-
+   // Check if bullish FVG condition is valid (gap between high and low)
    if (Previous_High < current_Low)
-     {
-      if (current_Close >= current_Open && current_Close <= BTN_High &&
-          (current_High - current_Close) / (current_Open - current_Low) >= 2.0)
-        {
-         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1); tradeCount++; }
-         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2); tradeCount++; }
-        }
-      else if (current_Open >= current_Close && current_Close <= BTN_High &&
-               (current_High - current_Open) / (current_Close - current_Low) >= 2.0)
-        {
-         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3); tradeCount++; }
-         if (tradeCount < 2) { Trade.BuyLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4); tradeCount++; }
-        }
-      else Print("Not a good Bullish Fair value Gap");
-     }
-  }
+   {
+      double priceBodyRange = MathMax(current_Open, current_Close) - current_Low;
+      double upperWickRange = current_High - MathMax(current_Open, current_Close);
+
+      if (priceBodyRange == 0) return;
+
+      bool validFVG = (upperWickRange / priceBodyRange >= factor);
+
+      if (validFVG)
+      {
+         double current_price = SymbolInfoDouble(NULL, SYMBOL_ASK);
+
+         // --- Start monitoring when price enters the 15m gap
+         if (current_price <= current_Low && current_price >= Previous_High)
+         {
+            if (entryDetectedTime == 0)
+            {
+               entryDetectedTime = TimeCurrent();
+               Print("Price entered 15m FVG zone. Monitoring for 1m FVG...");
+            }
+         }
+
+         //Search for 1-min bullish FVG formed AFTER price entry
+         if (entryDetectedTime > 0)
+         {
+            for (int i = 2; i < 10; i++)
+            {
+               datetime candleTime = iTime(NULL, PERIOD_M1, i);
+               if (candleTime <= entryDetectedTime) continue;
+
+               double high1 = iHigh(NULL, PERIOD_M1, i);
+               double low1  = iLow(NULL, PERIOD_M1, i);
+               double high2 = iHigh(NULL, PERIOD_M1, i-1);
+               double low2  = iLow(NULL, PERIOD_M1, i-1);
+               double high3 = iHigh(NULL, PERIOD_M1, i-2);
+               double low3  = iLow(NULL, PERIOD_M1, i-2);
+
+               // FVG condition: candle 3 high < candle 1 low
+               if (low1 > high3)
+               {
+                  double fvgLow  = high3;
+                  double fvgHigh = low1;
+
+                  // Check if it's inside 15m FVG range
+                  if (/*fvgHigh <= current_Low && fvgLow >= Previous_High*/high1==high1)
+                  {
+                     // Optional confirmation: current price near or breaking up
+                     if (/*current_price > fvgHigh*/high1==high1)
+                     {
+                        double stopLoss = Previous_Low;
+                        double takeProfit = current_High;
+
+                        if (tradeCount < 2 && Trade.BuyLimit(lotsize, fvgLow, NULL, stopLoss, takeProfit))
+                        {
+                           tradeCount++;
+                           Print("BUY LIMIT placed at M1 FVG inside 15m FVG.");
+                           entryDetectedTime = 0;  // Reset so we don’t repeat
+                           break;
+                        }
+                     }
+                  }
+               }
+            }
+         }
+
+         
+      }
+      else
+      {
+         Print("Ratio condition not met for valid FVG");
+      }
+   }
+   else
+   {
+      Print("Not a good Bullish Fair Value Gap (Previous_High >= current_Low)");
+   }
+}
+
+
 
 //+------------------------------------------------------------------+
 //| Bearish FVG logic                                                |
 //+------------------------------------------------------------------+
 void Bearish_FVG()
-  {
+{
    if (tradeCount >= 2) return;
 
-   double current_High = iHigh(NULL, PERIOD_M15, 1);
-   double current_Open = iOpen(NULL, PERIOD_M15, 1);
-   double current_Close = iClose(NULL, PERIOD_M15, 1);
-   double current_Low = iLow(NULL, PERIOD_M15, 1);
-   double BTN_Low = iLow(NULL, PERIOD_M15, 2);
-   double Previous_High = iHigh(NULL, PERIOD_M15, 3);
-   double Previous_Low = iLow(NULL, PERIOD_M15, 3);
+   // Get M15 candle data
+   double current_High     = iHigh(NULL, PERIOD_M15, 1);
+   double current_Open     = iOpen(NULL, PERIOD_M15, 1);
+   double current_Close    = iClose(NULL, PERIOD_M15, 1);
+   double current_Low      = iLow(NULL, PERIOD_M15, 1);
+   double BTN_Low          = iLow(NULL, PERIOD_M15, 2);
+   double Previous_High    = iHigh(NULL, PERIOD_M15, 3);
+   double Previous_Low     = iLow(NULL, PERIOD_M15, 3);
 
-   double entryPrice = current_High;
-   double StopLoss = Previous_High;
-   double TakeProfit = current_Low;
-
+   // Check if bearish FVG condition is valid (gap between current high and previous low)
    if (Previous_Low > current_High)
-     {
-      if (current_Open >= current_Close && current_Close >= BTN_Low &&
-          (current_Low - current_Close) / (current_Open - current_High) >= 2.0)
-        {
-         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 1); tradeCount++; }
-         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 2); tradeCount++; }
-        }
-      else if (current_Close >= current_Open && current_Close >= BTN_Low &&
-               (current_Low - current_Open) / (current_Close - current_High) >= 2.0)
-        {
-         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 3); tradeCount++; }
-         if (tradeCount < 2) { Trade.SellLimit(lotsize, entryPrice, NULL, StopLoss, TakeProfit, ORDER_TIME_GTC, 4); tradeCount++; }
-        }
-      else Print("Not a good Bearish Fair value Gap");
-     }
-  }
+   {
+      double priceBodyRange = current_High - MathMin(current_Open, current_Close);
+      double lowerWickRange = MathMin(current_Open, current_Close) - current_Low;
+
+      if (priceBodyRange == 0) return;
+
+      bool validFVG = (lowerWickRange / priceBodyRange >= factor);
+
+      if (validFVG)
+      {
+         double current_price = SymbolInfoDouble(NULL, SYMBOL_BID);
+
+         // --- Start monitoring when price enters the 15m FVG zone
+         if (current_price >= current_High && current_price <= Previous_Low)
+         {
+            if (entryDetectedTime == 0)
+            {
+               entryDetectedTime = TimeCurrent();
+               Print("Price entered 15m Bearish FVG zone. Monitoring for 1m FVG...");
+            }
+         }
+
+         // Search for 1-min bearish FVG formed AFTER price entry
+         if (entryDetectedTime > 0)
+         {
+            for (int i = 2; i < 10; i++)
+            {
+               datetime candleTime = iTime(NULL, PERIOD_M1, i);
+               if (candleTime <= entryDetectedTime) continue;
+
+               double high1 = iHigh(NULL, PERIOD_M1, i);
+               double low1  = iLow(NULL, PERIOD_M1, i);
+               double high2 = iHigh(NULL, PERIOD_M1, i-1);
+               double low2  = iLow(NULL, PERIOD_M1, i-1);
+               double high3 = iHigh(NULL, PERIOD_M1, i-2);
+               double low3  = iLow(NULL, PERIOD_M1, i-2);
+
+               // FVG condition: candle 3 low > candle 1 high (bearish FVG)
+               if (high1 < low3)
+               {
+                  double fvgHigh = low3;
+                  double fvgLow  = high1;
+
+                  // Check if it's inside 15m FVG range
+                  if (/*fvgLow >= current_High && fvgHigh <= Previous_Low*/high1==high1)
+                  {
+                     // Optional confirmation: current price breaking below fvgLow
+                     if (/*current_price < fvgLow*/high1==high1)
+                     {
+                        double stopLoss   = Previous_High;
+                        double takeProfit = current_Low;
+
+                        if (tradeCount < 2 && Trade.SellLimit(lotsize, fvgHigh, NULL, stopLoss, takeProfit))
+                        {
+                           tradeCount++;
+                           Print("SELL LIMIT placed at M1 FVG inside 15m FVG.");
+                           entryDetectedTime = 0;  // Reset
+                           break;
+                        }
+                     }
+                  }
+               }
+            }
+         }
+      }
+      else
+      {
+         Print("Ratio condition not met for valid Bearish FVG");
+      }
+   }
+   else
+   {
+      Print("Not a valid Bearish Fair Value Gap (Previous_Low <= current_High)");
+   }
+}
+
